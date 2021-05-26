@@ -1,0 +1,2 @@
+- setup-file:
+    local-name: /home/cmd/robotics_assignment/arm_ws/install/setup.sh
