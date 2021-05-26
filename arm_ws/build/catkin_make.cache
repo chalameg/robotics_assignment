@@ -1,2 +1,0 @@
-arm_description:arm_gazebo:arm_lib
--DCATKIN_DEVEL_PREFIX=/home/cmd/robotics_assignment/arm_ws/devel -DCMAKE_INSTALL_PREFIX=/home/cmd/robotics_assignment/arm_ws/install -G Unix Makefiles

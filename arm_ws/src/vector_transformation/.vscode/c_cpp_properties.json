@@ -1,0 +1,20 @@
+{
+  "configurations": [
+    {
+      "browse": {
+        "databaseFilename": "",
+        "limitSymbolsToIncludedHeaders": true
+      },
+      "includePath": [
+        "/home/cmd/robotics_assignment/arm_ws/devel/include/**",
+        "/opt/ros/noetic/include/**",
+        "/home/cmd/robotics_assignment/arm_ws/src/arm_gazebo/include/**",
+        "/home/cmd/robotics_assignment/arm_ws/src/arm_lib/include/**",
+        "/home/cmd/robotics_assignment/arm_ws/src/vector_transformation/include/**",
+        "/usr/include/**"
+      ],
+      "name": "ROS"
+    }
+  ],
+  "version": 4
+}
