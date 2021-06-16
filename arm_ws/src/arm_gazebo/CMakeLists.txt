@@ -28,10 +28,6 @@ include_directories(${Boost_INCLUDE_DIR}
 add_library(${PROJECT_NAME} SHARED src/controller.cpp)
 target_link_libraries(${PROJECT_NAME} ${catkin_LIBRARIES} ${GAZEBO_LIBRARIES} ${roscpp_LIBRARIES})
 
-add_library(control_joints SHARED src/control_joints.cpp)
-target_link_libraries(control_joints ${catkin_LIBRARIES} ${GAZEBO_LIBRARIES} ${roscpp_LIBRARIES})
-
-
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
 

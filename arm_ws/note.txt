@@ -1,0 +1,5 @@
+for final assignment add the following
+design gripper
+catch /release commands
+fk, ik services
+

@@ -7,6 +7,8 @@
 #include "ros/ros.h"
 #include "std_msgs/String.h"
 #include <arm_lib/Angles.h>
+#include <arm_lib/fk.h>
+#include <arm_lib/ik.h>
 #include "ros/callback_queue.h"
 #include "ros/subscribe_options.h"	
 #include <thread>
@@ -32,10 +34,10 @@ namespace gazebo
 			// Store the pointer to the model
 			this->model = _parent;
 
-			// // intiantiate the joint controller
+			// // instiantiate the joint controller
 			this->jointController = this->model->GetJointController();
 
-			this->pid = common::PID(10.1, 4.01, 8.03);
+			this->pid = common::PID(5.1, 4.01, 10.03);
 
 			this->rosNode.reset(new ros::NodeHandle("gazebo_client"));
 			ros::SubscribeOptions so = ros::SubscribeOptions::create<arm_lib::Angles>(
@@ -43,12 +45,33 @@ namespace gazebo
 				1,
 				boost::bind(&ModelPush::OnRosMsg, this, _1),
 				ros::VoidPtr(), &this->rosQueue);
-			this->current_angles_pub = this->rosNode->advertise<std_msgs::String>("/current_angles", 1000);
+			this->current_angles_pub = this->rosNode->advertise<arm_lib::Angles>("/current_angles", 1000);
 			this->rosSub = this->rosNode->subscribe(so);
 
+			// subscribe 
+            this->rosNode1.reset(new ros::NodeHandle("gazebo_client1"));
+            ros::SubscribeOptions so1 =
+                ros::SubscribeOptions::create<std_msgs::String>(
+                     "/catchrelease",
+                        1,
+                    boost::bind(&ModelPush::OnRosMsg1, this, _1),
+                    ros::VoidPtr(), &this->rosQueue1);
+
+            this->rosSub = this->rosNode->subscribe(so1);
+
 			this->rosQueueThread = std::thread(std::bind(&ModelPush::QueueThread, this));
+			this->rosQueueThread1 =
+              std::thread(std::bind(&ModelPush::QueueThread1, this));
+
 			this->rosDataPublishThread = std::thread(std::bind(&ModelPush::Publish, this));
 
+			left_finger = this->model->GetJoint("palm_left_finger")->GetScopedName();
+            right_finger = this->model->GetJoint("palm_right_finger")->GetScopedName();
+
+			this->jointController->SetPositionPID(this->left_finger, this->pid);
+            this->jointController->SetPositionPID(this->right_finger, this->pid);
+
+			inverseKinematics();
 			// Listen to the update event. This event is broadcast every
 			// simulation iteration.
 			this->updateConnection = event::Events::ConnectWorldUpdateBegin(
@@ -56,6 +79,24 @@ namespace gazebo
 
 		}
 
+	private:
+		void inverseKinematics()
+		{
+			//call inverse kinematics service
+			ros::ServiceClient client1 = this->rosNode->serviceClient<arm_lib::ik>("/ik");
+			arm_lib::ik srv1;
+			srv1.request.actuator_pose = {2,1,1};
+			
+			if(client1.call(srv1)){
+	
+				// std::cout << srv1.response.new_angles[1] << std::endl;
+				angle[0] = srv1.response.new_angles[0];
+				angle[1] = srv1.response.new_angles[1];
+				angle[2] = srv1.response.new_angles[2];
+				angle[3] = srv1.response.new_angles[3];
+				// std::cout << "/fk is called." ;
+			}
+		}
 
 	private:
 		void Publish()
@@ -63,30 +104,26 @@ namespace gazebo
 			ros::Rate loop_rate(10);
 			while (ros::ok())
 			{
-				double a1 = getJointPose("chassis_arm1_joint", 0);
-				double a2 = getJointPose("arm1_arm2_joint", 0);
-				double a3 = getJointPose("arm2_arm3_joint", 0);
-				double a4 = getJointPose("arm3_arm4_joint", 0);
-
-				physics::LinkPtr arm4 = this->model->GetLink("arm4");
-				physics::LinkState state = physics::LinkState(arm4);
-				ignition::math::Vector3d pos = state.Pose().Pos();
 				
-				std_msgs::String msg;
-				std::stringstream ss;
-				ss << "arm_4 pose X: " << pos.X() << "\n"
-				<< "arm_4 pose Y: " << pos.Y() << "\n"
-				<< "arm_4 pose Z: " << pos.Z() << "\n"
-				<< "current angles of: \n"
-				<< "chassis_arm1_joint = " << a1 << "\n"
-				<< "arm1_arm2_joint = " << a2 << "\n"
-				<< "arm2_arm3_joint = " << a3 << "\n"
-				<< "arm3_arm4_joint = " << a4 << "\n";
-				msg.data = ss.str();
+				//call forward kinematics and publish end effector pose
+				arm_lib::Angles pos;
+				pos.chassis_arm1 = getJointPose("chassis_arm1_joint", 0);
+				pos.arm1_arm2 = getJointPose("arm1_arm2_joint", 0);
+				pos.arm2_arm3  = getJointPose("arm2_arm3_joint", 0);
+				pos.arm3_arm4 = getJointPose("arm3_arm4_joint", 0);
+				
+				ros::ServiceClient client = this->rosNode->serviceClient<arm_lib::fk>("/fk");
+				arm_lib::fk srv;  
+				srv.request.joint_angles = {pos.chassis_arm1, pos.arm1_arm2, pos.arm2_arm3, pos.arm3_arm4};
+				srv.request.link_lengths = {0.05, 2.0, 1.0, 1.0, };
+				if(client.call(srv)){
+					pos.actuator_x = srv.response.actuator_pose[0];
+					pos.actuator_y = srv.response.actuator_pose[1];
+					pos.actuator_z = srv.response.actuator_pose[2];
+				}
+				this->current_angles_pub.publish(pos);
 
-				this->current_angles_pub.publish(msg);
-
-				std::cout << ss.str() << std::endl;
+				std::cout << pos << std::endl;
 
 				ros::spinOnce();
 				loop_rate.sleep();
@@ -112,6 +149,28 @@ namespace gazebo
 			angle[3] = msg->arm3_arm4;
 		}
 
+		public: void OnRosMsg1(const std_msgs::String::ConstPtr& msg)
+        {
+
+            std::stringstream ss(msg->data.c_str());
+            
+            std::string s = ss.str(); 
+            std::cout <<  s << std::endl;
+            
+            if(s.find("catch") != std::string::npos){
+               ROS_INFO("value Equals catch"); 
+               this->jointController->SetPositionTarget(this->left_finger, -0.52360);
+               this->jointController->SetPositionTarget(this->right_finger, 0.52360);
+            }else{
+                if(s.find("release") != std::string::npos){
+                  this->jointController->SetPositionTarget(this->left_finger, 0.6);
+                  this->jointController->SetPositionTarget(this->right_finger, -0.6);
+                }
+            }
+
+        }
+
+
 	public:
   		void QueueThread()
 			{
@@ -121,6 +180,15 @@ namespace gazebo
 				this->rosQueue.callAvailable(ros::WallDuration(timeout));
 				}
 			}
+	private: void QueueThread1()
+        {
+			static const double timeout = 0.01;
+			while (this->rosNode1->ok())
+			{
+				this->rosQueue1.callAvailable(ros::WallDuration(timeout));
+			}          
+
+        }
 
 	private:
 		void SetJointAngle(std::string joint_name, float degree)
@@ -168,6 +236,8 @@ namespace gazebo
 
 	private:
 		std::unique_ptr<ros::NodeHandle> rosNode;
+	private: 
+		std::unique_ptr<ros::NodeHandle> rosNode1;
 
 	private:
 		ros::Subscriber rosSub;
@@ -176,10 +246,13 @@ namespace gazebo
 		ros::Subscriber linkStateSub;
 
 	private:
-		std::thread rosQueueThread, rosDataPublishThread;
+		std::thread rosQueueThread,rosQueueThread1, rosDataPublishThread;
 
 	private:
 		ros ::CallbackQueue rosQueue;
+		ros::CallbackQueue rosQueue1;
+		std::string right_finger;
+        std::string left_finger;
 
 	};
 	// Register this plugin with the simulator

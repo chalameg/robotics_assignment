@@ -6,6 +6,12 @@
 #include <iostream>
 #include "ros/ros.h"
 #include "std_msgs/String.h"
+#include <arm_lib/Angles.h>
+#include "ros/callback_queue.h"
+#include "ros/subscribe_options.h"	
+#include <thread>
+#include <ignition/math/Vector3.hh>
+#include <ignition/math/Pose3.hh>
 
 namespace gazebo
 {
@@ -29,50 +35,93 @@ namespace gazebo
 			// // intiantiate the joint controller
 			this->jointController = this->model->GetJointController();
 
-			// // set your PID values
-			this->pid = common::PID(31.1, 10.01, 10.03);
+			this->pid = common::PID(10.1, 4.01, 8.03);
+
+			this->rosNode.reset(new ros::NodeHandle("gazebo_client"));
+			ros::SubscribeOptions so = ros::SubscribeOptions::create<arm_lib::Angles>(
+				"/" + this->model->GetName() + "/pos_cmd",
+				1,
+				boost::bind(&ModelPush::OnRosMsg, this, _1),
+				ros::VoidPtr(), &this->rosQueue);
+			this->current_angles_pub = this->rosNode->advertise<std_msgs::String>("/current_angles", 1000);
+			this->rosSub = this->rosNode->subscribe(so);
+
+			this->rosQueueThread = std::thread(std::bind(&ModelPush::QueueThread, this));
+			this->rosDataPublishThread = std::thread(std::bind(&ModelPush::Publish, this));
 
 			// Listen to the update event. This event is broadcast every
 			// simulation iteration.
 			this->updateConnection = event::Events::ConnectWorldUpdateBegin(
 				std::bind(&ModelPush::OnUpdate, this));
 
-			//create rosnode to publish current angle of joints
-			ros::NodeHandle n;
-			this->current_angles_pub = n.advertise<std_msgs::String>("current_angles_topic_two", 100);
+		}
+
+
+	private:
+		void Publish()
+		{
+			ros::Rate loop_rate(10);
+			while (ros::ok())
+			{
+				double a1 = getJointPose("chassis_arm1_joint", 0);
+				double a2 = getJointPose("arm1_arm2_joint", 0);
+				double a3 = getJointPose("arm2_arm3_joint", 0);
+				double a4 = getJointPose("arm3_arm4_joint", 0);
+
+				physics::LinkPtr arm4 = this->model->GetLink("arm4");
+				physics::LinkState state = physics::LinkState(arm4);
+				ignition::math::Vector3d pos = state.Pose().Pos();
+				
+				std_msgs::String msg;
+				std::stringstream ss;
+				ss << "arm_4 pose X: " << pos.X() << "\n"
+				<< "arm_4 pose Y: " << pos.Y() << "\n"
+				<< "arm_4 pose Z: " << pos.Z() << "\n"
+				<< "current angles of: \n"
+				<< "chassis_arm1_joint = " << a1 << "\n"
+				<< "arm1_arm2_joint = " << a2 << "\n"
+				<< "arm2_arm3_joint = " << a3 << "\n"
+				<< "arm3_arm4_joint = " << a4 << "\n";
+				msg.data = ss.str();
+
+				this->current_angles_pub.publish(msg);
+
+				std::cout << ss.str() << std::endl;
+
+				ros::spinOnce();
+				loop_rate.sleep();
+			}
 		}
 
 		// Called by the world update start event
 	public:
 		void OnUpdate()
 		{
-
-			SetJointAngle("chasis_arm1_joint", 30);
-			SetJointAngle("arm1_arm2_joint", 30);
-			SetJointAngle("arm2_arm3_joint", -30);
-			SetJointAngle("arm3_arm4_joint", 30);
-
+			SetJointAngle("chassis_arm1_joint", angle[0]);
+			SetJointAngle("arm1_arm2_joint", angle[1]);
+			SetJointAngle("arm2_arm3_joint", angle[2]);
+			SetJointAngle("arm3_arm4_joint", angle[3]);
 			
-			double a1 = getJointPose("chasis_arm1_joint", 0);
-			double a2 = getJointPose("arm1_arm2_joint", 0);
-			double a3 = getJointPose("arm2_arm3_joint", 0);
-			double a4 = getJointPose("arm3_arm4_joint", 0);
-
-			std_msgs::String msg;
-			std::stringstream ss;
-			ss << "current angles of: "
-			   << "chasis_arm1_joint = " << a1 << " "
-			   << "arm1_arm2_joint = " << a2 << " "
-			   << "arm2_arm3_joint = " << a3 << " "
-			   << "arm3_arm4_joint = " << a4 << " ";
-			msg.data = ss.str();
-
-			// msg.data = "Current arm1_arm2_joint values: " + std::to_string(a1 * 180.0 / M_PI);
-			this->current_angles_pub.publish(msg);
-
-			std::cout << ss.str() << std::endl;
 		}
-	
+	public:
+		void OnRosMsg(const arm_lib::Angles::ConstPtr &msg)
+		{
+			angle[0] = msg->chassis_arm1;
+			angle[1] = msg->arm1_arm2;
+			angle[2] = msg->arm2_arm3;
+			angle[3] = msg->arm3_arm4;
+		}
+
+	public:
+  		void QueueThread()
+			{
+				static const double timeout = 0.01;
+				while (this->rosNode->ok())
+				{
+				this->rosQueue.callAvailable(ros::WallDuration(timeout));
+				}
+			}
+
 	private:
 		void SetJointAngle(std::string joint_name, float degree)
 		{
@@ -94,6 +143,9 @@ namespace gazebo
 			return a1 * 180.0 / M_PI;
 		}
 
+	private:
+  		float angle[4] = {0, 0, 0, 0};
+
 	// a pointer that points to a model object
 	private:
 		physics::ModelPtr model;
@@ -113,26 +165,23 @@ namespace gazebo
 
 	private:
 		ros::Publisher current_angles_pub;
+
+	private:
+		std::unique_ptr<ros::NodeHandle> rosNode;
+
+	private:
+		ros::Subscriber rosSub;
+
+	private:
+		ros::Subscriber linkStateSub;
+
+	private:
+		std::thread rosQueueThread, rosDataPublishThread;
+
+	private:
+		ros ::CallbackQueue rosQueue;
+
 	};
-
-	// private:
-	// 	std::unique_ptr<ros::NodeHandle> rosNode;
-
-	// private:
-	// 	ros::Subscriber rosSub;
-
-	// private:
-	// 	ros::Subscriber linkStateSub;
-
-	// private:
-	// 	std::thread rosQueueThread, rosDataPublishThread;
-
-	// private:
-	// 	ros ::CallbackQueue rosQueue;
-
-	// private:
-	//   ros::Publisher data_pub;
-
 	// Register this plugin with the simulator
 	GZ_REGISTER_MODEL_PLUGIN(ModelPush)
 }
